@@ -27,6 +27,15 @@ function addLog(woId, action, detail, actor = { user: '系统', role: '' }) {
     woId, action, detail || '', actor.user || '系统', actor.assigneeRole || actor.role || '', now())
 }
 
+// 声明发布进度回写（statements 模块调用）：以 action=statement 写入工单日志，不改动工单状态机
+export function noteWorkOrderProgress(woId, detail, actor = { user: '系统' }, team = '') {
+  const w = q1('SELECT id FROM work_orders WHERE id=?', woId)
+  if (!w) return
+  run('INSERT INTO work_order_logs (wo_id,action,detail,operator,operator_role,time) VALUES (?,?,?,?,?,?)',
+    woId, 'statement', detail || '', actor.user || '系统', team, now())
+  run('UPDATE work_orders SET updated=? WHERE id=?', now(), woId)
+}
+
 // 危机下未完结工单数（结案守卫/看板汇总）
 export function crisisOpenCount(crisisId) {
   return q1("SELECT COUNT(*) c FROM work_orders WHERE crisis_id=? AND status IN ('todo','doing','blocked')", crisisId).c

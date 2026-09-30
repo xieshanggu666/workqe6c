@@ -123,7 +123,8 @@ function stText(s) { return { monitoring: '监测中', disposal: '处置中', cl
 function logText(a) {
   return {
     created: '拆分', assigned: '分派', claimed: '认领', started: '开始', blocked: '阻塞',
-    unblocked: '恢复', done: '完成', rework: '回退', cancelled: '取消', escalated: '升级'
+    unblocked: '恢复', done: '完成', rework: '回退', cancelled: '取消', escalated: '升级',
+    statement: '声明发布'
   }[a] || a
 }
 // SLA 文案：阻塞挂起用服务端冻结剩余，其余按本地秒针倒数
@@ -288,4 +289,5 @@ textarea{resize:vertical;min-height:52px;}
 .lg-act.escalated,.lg-act.rework{color:#ffab91;border-color:rgba(255,138,101,.35);}
 .lg-act.done{color:#81c784;border-color:rgba(102,187,106,.35);}
 .lg-act.blocked,.lg-act.cancelled{color:#ce93d8;border-color:rgba(171,71,188,.35);}
+.lg-act.statement{color:#80cbc4;border-color:rgba(128,203,196,.35);}
 </style>

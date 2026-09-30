@@ -23,6 +23,7 @@ export const usePubStore = defineStore('pub', {
     propCrisisFilter: null, // 从危机卡片跳转传播路径页带入的危机过滤
     reportDraftCrisis: null, // 从危机卡片/回溯跳转复盘报告页：无报告时带危机预填建档
     reportOpenId: null,      // 从危机卡片/回溯跳转复盘报告页：已有报告时自动展开详情
+    stmtDraftCrisis: null,   // 从危机卡片「起草声明」带入的预填危机 id
     toast: null
   }),
   actions: {
@@ -234,6 +235,28 @@ export const usePubStore = defineStore('pub', {
       const r = await api(`/reports/${id}/rollback`, 'POST', { version, note })
       await this.load()
       this.msg(`已回滚至 v${r.targetVersion}（新归档 v${r.newVersion}），退回编制中`, 'success')
+      return r
+    },
+    // ===== 危机声明发布（公关起草 → 法务审核 → 分渠道执行登记） =====
+    async fetchStatements(filter) { return await api('/statements', 'GET', null, filter) },
+    async fetchStatement(id) { return await api(`/statements/${id}`) },
+    async createStatement(body) {
+      const r = await api('/statements', 'POST', body)
+      await this.load() // 刷新危机卡片声明统计与角标
+      this.msg(`声明「${body.title}」已起草（v1）`, 'success')
+      return r
+    },
+    async updateStatement(id, body) { return await api(`/statements/${id}`, 'PUT', body) },
+    // 声明操作（送审/通过/驳回/作废）：统一入口，错误 toast 由调用方处理
+    async statementOp(id, op, body) {
+      const r = await api(`/statements/${id}/${op}`, 'POST', body || {})
+      await this.load() // 进度回写危机时间线：刷新全局统计
+      return r
+    },
+    // 分渠道发布登记（发布成功/标记失败）
+    async statementChannelOp(id, cid, op, body) {
+      const r = await api(`/statements/${id}/channels/${cid}/${op}`, 'POST', body || {})
+      await this.load()
       return r
     }
   }

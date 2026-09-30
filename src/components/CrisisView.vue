@@ -30,6 +30,7 @@
           <span class="origin" :class="c.origin">{{ c.origin==='auto' ? '🤖 自动建档' : '✍️ 人工建档' }}</span>
           <span v-if="c.open_events" class="open-badge">🔔 未解除预警 {{ c.open_events }}</span>
           <span v-if="c.wo_total" class="wo-badge" :class="{open:c.wo_open}">📋 工单 {{ c.wo_open ? c.wo_open+' 在办 / ' : '' }}{{ c.wo_total }}</span>
+          <span v-if="c.stmt_total" class="stmt-badge" :class="{open:c.stmt_open}" @click="gotoStatement(c)" title="查看危机声明发布">📣 声明 {{ c.stmt_open ? c.stmt_open+' 进行中 / ' : '' }}{{ c.stmt_total }}</span>
           <span v-if="c.prop_active" class="prop-badge" :class="{out:c.prop_outbreak}" @click="gotoProp(c)" title="查看关联的传播路径">
             🕸 传播路径 {{ c.prop_active }}{{ c.prop_outbreak ? ' · 🔥爆发 '+c.prop_outbreak : '' }}
           </span>
@@ -140,6 +141,7 @@
           <button class="ghost" @click="addStep(c)">＋ 记录处置</button>
           <button v-if="c.status==='monitoring'||c.status==='disposal'" class="prog" @click="advance(c)">推进处置</button>
           <button v-if="c.status!=='closed'" class="wo-btn" @click="splitWorkOrder(c)">📋 拆分工单</button>
+          <button v-if="c.status!=='closed'" class="stmt-btn" @click="gotoStatement(c)">📣 起草声明</button>
           <button v-if="c.report || isOps" class="report-btn" @click="gotoReport(c)">📝 {{ c.report ? '复盘报告' : '编制复盘' }}</button>
           <button class="ghost" @click="toggleReview(c)">{{ reviewId===c.id ? '收起回溯' : '🔍 回溯' }}</button>
           <button v-if="c.status!=='closed'" class="close" @click="toggleReview(c, true)">结案</button>
@@ -203,6 +205,11 @@ function splitWorkOrder(c) {
   store.woDraftCrisis = c.id
   store.tab = 'work'
 }
+// 跳转声明发布页并预填所属危机（公关起草）
+function gotoStatement(c) {
+  store.stmtDraftCrisis = c.id
+  store.tab = 'stmt'
+}
 // 跳转复盘报告页（已有报告直接打开，无报告则带危机预填建档）
 function gotoReport(c) {
   store.reportOpenId = c.report ? c.report.id : null
@@ -247,6 +254,8 @@ textarea{resize:vertical;min-height:52px;}
 .open-badge{font-size:10px;padding:2px 8px;border-radius:6px;background:#3e2723;color:#ffab91;border:1px solid rgba(255,138,101,.3);}
 .wo-badge{font-size:10px;padding:2px 8px;border-radius:6px;background:#0d2137;color:#90caf9;border:1px solid rgba(144,202,249,.25);}
 .wo-badge.open{background:#132a52;color:#bbdefb;border-color:rgba(66,165,245,.4);}
+.stmt-badge{font-size:10px;padding:2px 8px;border-radius:6px;background:#0d2137;color:#90caf9;border:1px solid rgba(144,202,249,.25);cursor:pointer;}
+.stmt-badge.open{background:#132a52;color:#bbdefb;border-color:rgba(66,165,245,.4);}
 .prop-badge{font-size:10px;padding:2px 8px;border-radius:6px;background:#0d2b28;color:#80cbc4;border:1px solid rgba(0,150,136,.3);cursor:pointer;}
 .prop-badge.out{background:#3a1a24;color:#ef9a9a;border-color:rgba(239,83,80,.45);}
 .report-badge{font-size:10px;padding:2px 8px;border-radius:6px;background:#1f1640;color:#ce93d8;border:1px solid rgba(149,117,205,.35);cursor:pointer;}
@@ -320,6 +329,7 @@ h5{margin:0 0 8px;color:#ffd54f;font-size:12px;}
 .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
 .prog{background:linear-gradient(135deg,#ef6c00,#e65100);border:none;color:#fff;font-weight:600;cursor:pointer;}
 .wo-btn{background:linear-gradient(135deg,#00897b,#00695c);border:none;color:#fff;font-weight:600;cursor:pointer;}
+.stmt-btn{background:linear-gradient(135deg,#1e88e5,#1565c0);border:none;color:#fff;font-weight:600;cursor:pointer;}
 .report-btn{background:linear-gradient(135deg,#7b1fa2,#4a148c);border:none;color:#fff;font-weight:600;cursor:pointer;}
 .close{background:linear-gradient(135deg,#2e7d32,#1b5e20);border:none;color:#fff;font-weight:600;cursor:pointer;}
 .reopen{background:linear-gradient(135deg,#f9a825,#f57f17);border:none;color:#fff;font-weight:600;cursor:pointer;}

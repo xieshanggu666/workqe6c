@@ -14,6 +14,7 @@
       <div class="stat prop"><span class="s-ic">🕸</span><b>{{ s.propActive ?? 0 }}</b><em>监测传播路径</em></div>
       <div class="stat prop-out"><span class="s-ic">🔥</span><b>{{ s.propOutbreak ?? 0 }}</b><em>爆发期路径</em></div>
       <div class="stat report"><span class="s-ic">📝</span><b>{{ s.reportPublished ?? 0 }}</b><em>已发布复盘报告</em></div>
+      <div class="stat stmt"><span class="s-ic">📣</span><b>{{ s.stmtActive ?? 0 }}</b><em>进行中声明{{ s.stmtReviewing ? `（待法务 ${s.stmtReviewing}）` : '' }}</em></div>
       <div v-if="s.reportReviewing" class="stat report-rev"><span class="s-ic">🖊</span><b>{{ s.reportReviewing }}</b><em>报告待审核</em></div>
     </div>
 
@@ -165,6 +166,7 @@ function statusText(st) { return { monitoring: '监测中', disposal: '处置中
 .stat.alarm b{color:#ffab91;}.stat.crisis b{color:#90caf9;}.stat.wo b{color:#80cbc4;}
 .stat.prop b{color:#80cbc4;}.stat.prop-out b{color:#ef5350;}
 .stat.report b{color:#ce93d8;}.stat.report-rev b{color:#ffcc80;}
+.stat.stmt b{color:#64b5f6;}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}
 @media(max-width:860px){.grid{grid-template-columns:1fr;}}
 .card{background:#0f1b38;border:1px solid rgba(120,160,220,0.16);border-radius:12px;padding:16px;}
