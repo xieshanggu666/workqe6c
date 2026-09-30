@@ -23,6 +23,9 @@ export const usePubStore = defineStore('pub', {
     propCrisisFilter: null, // 从危机卡片跳转传播路径页带入的危机过滤
     reportDraftCrisis: null, // 从危机卡片/回溯跳转复盘报告页：无报告时带危机预填建档
     reportOpenId: null,      // 从危机卡片/回溯跳转复盘报告页：已有报告时自动展开详情
+    stmtDraftCrisis: null,   // 从危机卡片/工单卡片跳转声明页：带危机预填起草
+    stmtWorkOrderId: null,   // 从工单卡片跳转：起草时预关联的处置工单
+    stmtOpenId: null,        // 跳转声明页时自动展开详情
     toast: null
   }),
   actions: {
@@ -234,6 +237,63 @@ export const usePubStore = defineStore('pub', {
       const r = await api(`/reports/${id}/rollback`, 'POST', { version, note })
       await this.load()
       this.msg(`已回滚至 v${r.targetVersion}（新归档 v${r.newVersion}），退回编制中`, 'success')
+      return r
+    },
+    // ===== 危机声明（公关起草 → 法务审核 → 分渠道发布登记） =====
+    async fetchStatements(filter) { return await api('/statements', 'GET', null, filter) },
+    async fetchStatement(id) { return (await api(`/statements/${id}`)).statement },
+    async createStatement(body) {
+      const r = await api('/statements', 'POST', body)
+      await this.load()
+      this.msg('危机声明已起草', 'success')
+      return r
+    },
+    async editStatement(id, body) { return await api(`/statements/${id}`, 'PUT', body) },
+    async submitStatement(id, body) {
+      const r = await api(`/statements/${id}/submit`, 'POST', body || {})
+      await this.load()
+      this.msg('声明已提交法务审核', 'success')
+      return r
+    },
+    async approveStatement(id, note) {
+      const r = await api(`/statements/${id}/approve`, 'POST', { note })
+      await this.load()
+      this.msg('法务审核通过，声明可发起发布', 'success')
+      return r
+    },
+    async rejectStatement(id, note) {
+      const r = await api(`/statements/${id}/reject`, 'POST', { note })
+      await this.load()
+      this.msg('声明已驳回，退回公关修改', 'info')
+      return r
+    },
+    async startStatementPublish(id, body) {
+      const r = await api(`/statements/${id}/publish`, 'POST', body || {})
+      await this.load()
+      this.msg('已发起分渠道发布，等待各渠道执行登记', 'success')
+      return r
+    },
+    async cancelStatement(id, reason) {
+      const r = await api(`/statements/${id}/cancel`, 'POST', { reason })
+      await this.load()
+      this.msg('声明已取消', 'info')
+      return r
+    },
+    async registerStmtChannel(chId, body) {
+      const r = await api(`/statement-channels/${chId}/register`, 'POST', body)
+      await this.load()
+      return r
+    },
+    async retryStmtChannel(chId, body) {
+      const r = await api(`/statement-channels/${chId}/retry`, 'POST', body || {})
+      await this.load()
+      this.msg('渠道已重置为待执行，可重新登记结果', 'success')
+      return r
+    },
+    async cancelStmtChannel(chId, reason) {
+      const r = await api(`/statement-channels/${chId}/cancel`, 'POST', { reason })
+      await this.load()
+      this.msg('该渠道已取消', 'info')
       return r
     }
   }

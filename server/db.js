@@ -418,6 +418,66 @@ CREATE TABLE IF NOT EXISTS crisis_report_logs (
   time TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_report_logs_report ON crisis_report_logs (report_id, id);
+-- ===== 危机声明（公关起草 → 法务审核 → 分渠道发布执行与结果登记） =====
+-- 声明主表：状态机 draft 起草中 → review 待法务审核 → approved 审核通过 → publishing 发布中 → published 发布完成
+-- （驳回退回 draft；draft/approved/publishing 可取消为 cancelled），发布进度回写处置工单与危机统一时间线
+CREATE TABLE IF NOT EXISTS crisis_statements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  crisis_id INTEGER NOT NULL,              -- 所属危机事件
+  work_order_id INTEGER,                   -- 关联处置工单（起草/审核/发布进度同步回写工单日志）
+  title TEXT NOT NULL,                     -- 声明标题
+  content TEXT NOT NULL DEFAULT '',        -- 声明正文（公关起草，驳回后可修改重新送审）
+  channels TEXT NOT NULL DEFAULT '[]',     -- 拟发布渠道 key 列表 JSON（weibo/wechat/website/news/video/press）
+  priority TEXT NOT NULL DEFAULT 'high',   -- urgent/high/normal
+  status TEXT NOT NULL DEFAULT 'draft',    -- draft/review/approved/publishing/published/cancelled
+  drafted_by TEXT NOT NULL DEFAULT '',
+  drafted_at TEXT,
+  submitted_by TEXT NOT NULL DEFAULT '',
+  submitted_at TEXT,
+  reviewed_by TEXT NOT NULL DEFAULT '',    -- 法务审核人
+  reviewed_at TEXT,
+  review_note TEXT NOT NULL DEFAULT '',    -- 审核意见 / 驳回原因（重新送审后留痕于日志）
+  publish_by TEXT NOT NULL DEFAULT '',     -- 发起分渠道发布的执行人
+  publish_at TEXT,
+  published_at TEXT,                       -- 全渠道执行登记完成时间
+  cancel_by TEXT NOT NULL DEFAULT '',
+  cancel_at TEXT,
+  cancel_reason TEXT NOT NULL DEFAULT '',
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_statements_crisis ON crisis_statements (crisis_id, id);
+CREATE INDEX IF NOT EXISTS idx_statements_status ON crisis_statements (status);
+-- 分渠道发布执行与结果登记：一条声明每个渠道一行（路径内幂等），发布人员逐渠道登记执行结果
+CREATE TABLE IF NOT EXISTS crisis_statement_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id INTEGER NOT NULL,
+  channel TEXT NOT NULL,                   -- weibo/wechat/website/news/video/press
+  channel_name TEXT NOT NULL DEFAULT '',
+  assignee TEXT NOT NULL DEFAULT '',       -- 该渠道发布执行人
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending 待执行 / publishing 执行中 / success 已发布 / failed 失败 / cancelled 已取消
+  result TEXT NOT NULL DEFAULT '',         -- 执行结果登记（发布回执/说明）
+  published_url TEXT NOT NULL DEFAULT '',  -- 发布链接（成功时登记）
+  fail_reason TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,     -- 执行/重试次数
+  registered_by TEXT NOT NULL DEFAULT '',
+  registered_at TEXT,
+  published_at TEXT,
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL,
+  UNIQUE (statement_id, channel)
+);
+CREATE INDEX IF NOT EXISTS idx_stmt_channels_stmt ON crisis_statement_channels (statement_id, id);
+-- 声明全程留痕：起草/编辑/送审/通过/驳回/发起发布/逐渠道结果/完成/取消（含操作人，支撑跨角色审计）
+CREATE TABLE IF NOT EXISTS crisis_statement_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id INTEGER NOT NULL,
+  action TEXT NOT NULL,                    -- create/edit/submit/approve/reject/publish/channel_start/channel_result/channel_retry/channel_cancel/done/cancel
+  detail TEXT NOT NULL DEFAULT '',
+  operator TEXT NOT NULL DEFAULT '系统',
+  time TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stmt_logs_stmt ON crisis_statement_logs (statement_id, id);
 -- 注：posts.idem_key 索引在下方 ensureColumn 之后创建（旧库可能尚无该列，此处创建会导致启动失败）
 `)
 
@@ -467,6 +527,8 @@ ensureColumn('prop_paths', 'last_outbreak_wo_at', 'last_outbreak_wo_at INTEGER')
 ensureColumn('crisis_closures', 'report_id', 'report_id INTEGER')
 ensureColumn('crisis_closures', 'report_version', 'report_version INTEGER NOT NULL DEFAULT 0')
 ensureColumn('crisis_closures', 'report_title', "report_title TEXT NOT NULL DEFAULT ''")
+// 危机声明关联（工单卡片展示最近一次声明回写的进度）
+ensureColumn('work_orders', 'last_statement_id', 'last_statement_id INTEGER')
 
 // 迁移：早期版本 import_job_items.idem_key 为全局唯一，跨任务内容去重时同名键会冲突，
 // 重建表去掉该唯一约束（保留 (job_id, seq) 唯一与普通索引）。
@@ -910,3 +972,118 @@ function seedReports() {
   log.run(r2, 'edit', '响应与传播评估已由 李澈（值班员）保存', '李澈', 'ops', t2Eval)
 }
 seedReports()
+
+// 危机声明种子（独立幂等：公关起草 → 法务审核 → 分渠道发布登记；关联 c1/c2 与公关口径工单）
+function seedStatements() {
+  const n = db.prepare('SELECT COUNT(*) c FROM crisis_statements').get().c
+  if (n > 0) return
+  const now = new Date()
+  const ago = (m) => new Date(now.getTime() - m * 60000).toLocaleString('zh-CN')
+  const c1 = db.prepare("SELECT id FROM crisis WHERE title LIKE '%门店卫生%' ORDER BY id LIMIT 1").get()
+  const c2 = db.prepare("SELECT id FROM crisis WHERE title LIKE '%投诉类话题%' ORDER BY id LIMIT 1").get()
+  if (!c1 || !c2) return
+  const w1 = db.prepare("SELECT id FROM work_orders WHERE crisis_id=? AND title LIKE '%回应口径%' ORDER BY id LIMIT 1").get(c1.id)
+
+  const si = db.prepare(`INSERT INTO crisis_statements
+    (crisis_id,work_order_id,title,content,channels,priority,status,
+     drafted_by,drafted_at,submitted_by,submitted_at,reviewed_by,reviewed_at,review_note,
+     publish_by,publish_at,published_at,created,updated)
+    VALUES (?,?,?,?,?,?,'publishing',?,?,?,?,?,?,?,?,?,NULL,?,?)`)
+  // S1 整改情况说明（第二版）：法务已审核通过，分渠道发布执行中（2 已发 / 1 失败待重试 / 2 待执行）
+  const s1 = Number(si.run(
+    c1.id, w1 ? w1.id : null,
+    '某连锁品牌门店卫生事件整改情况说明',
+    '针对近日媒体报道的我司某加盟门店后厨操作不规范问题，公司高度重视，现说明如下：\n一、涉事门店已即刻停业整顿，全面开展后厨消杀与操作规范复查；\n二、已委托第三方检测机构对食材与操作环境进行独立检测，结果将第一时间向社会公布；\n三、即日起在全国门店启动食品安全专项自查，欢迎社会各界监督。\n我们对给消费者带来的担忧深表歉意，后续整改进展将持续通过官方渠道发布。',
+    JSON.stringify(['weibo', 'wechat', 'website', 'news', 'video']), 'urgent',
+    '李澈', ago(150), '李澈', ago(140), '陈律', ago(120), '口径与证据材料一致，整改表述已规避责任风险，同意按审核稿发布；媒体沟通中不得承诺检测结论。',
+    '张岚', ago(90), ago(160), ago(10)).lastInsertRowid)
+  if (w1) db.prepare('UPDATE work_orders SET last_statement_id=? WHERE id=?').run(s1, w1.id)
+
+  const ci = db.prepare(`INSERT INTO crisis_statement_channels
+    (statement_id,channel,channel_name,assignee,status,result,published_url,fail_reason,attempts,registered_by,registered_at,published_at,created,updated)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const t1 = ago(150)
+  // 微博：已发布
+  ci.run(s1, 'weibo', '官方微博', '李澈', 'success',
+    '已通过官方微博发布，置顶并关闭带节奏评论，转发 1.2w。', 'https://weibo.com/demo/status/s1wb', '', 1, '李澈', ago(70), ago(70), t1, ago(70))
+  // 官网：已发布
+  ci.run(s1, 'website', '官网新闻中心', '张岚', 'success',
+    '官网新闻中心已上线，附第三方检测预约说明。', 'https://brand.com/news/s1', '', 1, '张岚', ago(60), ago(60), t1, ago(60))
+  // 新闻通稿：首发失败（对接媒体未及时回执），可重试
+  ci.run(s1, 'news', '新闻通稿（媒体邮箱组）', '张岚', 'failed',
+    '', '', '媒体对接人未在截稿前回执，稿件暂缓；已电话沟通，可重试发送。', 1, '张岚', ago(30), null, t1, ago(30))
+  // 微信公众号 / 短视频：待执行
+  ci.run(s1, 'wechat', '微信公众号', '李澈', 'pending', '', '', '', 0, '', null, null, t1, t1)
+  ci.run(s1, 'video', '官方短视频账号', '李澈', 'pending', '', '', '', 0, '', null, null, t1, t1)
+
+  const li = db.prepare('INSERT INTO crisis_statement_logs (statement_id,action,detail,operator,time) VALUES (?,?,?,?,?)')
+  li.run(s1, 'create', '公关起草危机声明（紧急），拟定发布渠道：官方微博、微信公众号、官网、新闻通稿、官方短视频', '李澈', ago(150))
+  li.run(s1, 'edit', '补充第三方检测与致歉表述', '李澈', ago(145))
+  li.run(s1, 'submit', '提交法务审核', '李澈', ago(140))
+  li.run(s1, 'approve', '法务审核通过：口径与证据材料一致，同意按审核稿发布；媒体沟通中不得承诺检测结论。', '陈律', ago(120))
+  li.run(s1, 'publish', '发起分渠道发布，5 个渠道待执行（执行人：李澈/张岚）', '张岚', ago(90))
+  li.run(s1, 'channel_result', '【官方微博】发布成功：已置顶，转发 1.2w', '李澈', ago(70))
+  li.run(s1, 'channel_result', '【官网新闻中心】发布成功', '张岚', ago(60))
+  li.run(s1, 'channel_result', '【新闻通稿】发布失败：媒体对接人未在截稿前回执，可重试', '张岚', ago(30))
+
+  const tl = db.prepare('INSERT INTO crisis_timeline (crisis_id,action,note,time) VALUES (?,?,?,?)')
+  tl.run(c1.id, '声明起草', `公关 李澈 起草危机声明「某连锁品牌门店卫生事件整改情况说明」（第二版）`, ago(150))
+  tl.run(c1.id, '声明送审', `声明「某连锁品牌门店卫生事件整改情况说明」提交法务审核（提交人：李澈）`, ago(140))
+  tl.run(c1.id, '声明审核通过', `法务 陈律 审核通过：口径与证据材料一致，同意按审核稿发布`, ago(120))
+  tl.run(c1.id, '声明发布', `声明「某连锁品牌门店卫生事件整改情况说明」发起分渠道发布（官方微博/微信公众号/官网/新闻通稿/官方短视频），关联工单进度同步`, ago(90))
+  tl.run(c1.id, '声明渠道', `渠道发布登记：官方微博、官网新闻中心已发布；新闻通稿发送失败待重试（2/5 已发布）`, ago(30))
+  if (w1) {
+    const wl = db.prepare('INSERT INTO work_order_logs (wo_id,action,detail,operator,operator_role,time) VALUES (?,?,?,?,?,?)')
+    wl.run(w1.id, 'stmt', '关联危机声明「某连锁品牌门店卫生事件整改情况说明」法务审核通过，进入分渠道发布', '陈律', 'legal', ago(120))
+    wl.run(w1.id, 'stmt', '声明发布进度回写：官方微博、官网已发布；新闻通稿失败待重试（2/5 已发布）', '系统', '', ago(30))
+  }
+
+  // S2 首次回应声明：全渠道已发布（演示完整闭环）
+  const s2 = Number(db.prepare(`INSERT INTO crisis_statements
+    (crisis_id,work_order_id,title,content,channels,priority,status,
+     drafted_by,drafted_at,submitted_by,submitted_at,reviewed_by,reviewed_at,review_note,
+     publish_by,publish_at,published_at,created,updated)
+    VALUES (?,NULL,?,?,?,'urgent','published',?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    c1.id,
+    '关于某门店后厨卫生事件的首次回应',
+    '我们关注到媒体关于我司某门店后厨卫生的报道，已第一时间成立专项小组并赴现场核查，涉事门店已暂停营业。核查与整改情况将持续向公众通报，感谢媒体与消费者监督。',
+    JSON.stringify(['weibo', 'wechat', 'website', 'news']),
+    '李澈', ago(300), '李澈', ago(295), '陈律', ago(280), '首次回应口径稳妥，同意发布。',
+    '张岚', ago(270), ago(200), ago(300), ago(200)).lastInsertRowid)
+  const c2ins = db.prepare(`INSERT INTO crisis_statement_channels
+    (statement_id,channel,channel_name,assignee,status,result,published_url,fail_reason,attempts,registered_by,registered_at,published_at,created,updated)
+    VALUES (?,?,?,?,'success',?,?,'',1,?,?,?,?,?)`)
+  c2ins.run(s2, 'weibo', '官方微博', '李澈', '官方微博已发布并置顶。', 'https://weibo.com/demo/status/s2wb', '李澈', ago(240), ago(240), ago(270), ago(240))
+  c2ins.run(s2, 'wechat', '微信公众号', '李澈', '微信公众号推文已群发。', 'https://mp.weixin.qq.com/s/s2', '李澈', ago(230), ago(230), ago(270), ago(230))
+  c2ins.run(s2, 'website', '官网新闻中心', '张岚', '官网公告已上线。', 'https://brand.com/news/s2', '张岚', ago(220), ago(220), ago(270), ago(220))
+  c2ins.run(s2, 'news', '新闻通稿（媒体邮箱组）', '张岚', '通稿已发送媒体邮箱组，3 家媒体已采用。', '', '张岚', ago(200), ago(200), ago(270), ago(200))
+  const l2 = db.prepare('INSERT INTO crisis_statement_logs (statement_id,action,detail,operator,time) VALUES (?,?,?,?,?)')
+  l2.run(s2, 'create', '公关起草首次回应声明（紧急）', '李澈', ago(300))
+  l2.run(s2, 'submit', '提交法务审核', '李澈', ago(295))
+  l2.run(s2, 'approve', '法务审核通过：首次回应口径稳妥', '陈律', ago(280))
+  l2.run(s2, 'publish', '发起分渠道发布，4 个渠道待执行', '张岚', ago(270))
+  l2.run(s2, 'channel_result', '【官方微博】发布成功', '李澈', ago(240))
+  l2.run(s2, 'channel_result', '【微信公众号】发布成功', '李澈', ago(230))
+  l2.run(s2, 'channel_result', '【官网新闻中心】发布成功', '张岚', ago(220))
+  l2.run(s2, 'channel_result', '【新闻通稿】发布成功，3 家媒体采用', '张岚', ago(200))
+  l2.run(s2, 'done', '全部 4 个渠道发布登记完成', '张岚', ago(200))
+  db.prepare('INSERT INTO crisis_timeline (crisis_id,action,note,time) VALUES (?,?,?,?)')
+    .run(c1.id, '声明发布完成', '首次回应声明 4 个渠道（官方微博/微信公众号/官网/新闻通稿）全部发布完成', ago(200))
+
+  // S3 投诉升温事件声明：已送审，等待法务审核（演示审核流转）
+  const s3 = Number(db.prepare(`INSERT INTO crisis_statements
+    (crisis_id,work_order_id,title,content,channels,priority,status,
+     drafted_by,drafted_at,submitted_by,submitted_at,created,updated)
+    VALUES (?,NULL,?,?,?,'high','review',?,?,?,?,?,?)`).run(
+    c2.id,
+    '关于预售商品发货延迟问题的说明与补偿方案',
+    '近期收到部分用户反映预售商品发货延迟，我们深表歉意。说明如下：\n一、延迟系订单量激增叠加仓配调度所致，已加急补货并增派运力；\n二、对超期未发货订单支持一键取消并全额退款，同时补偿等额优惠券；\n三、客服通道已扩容，预计 48 小时内完成积压订单发货。\n感谢用户的理解与耐心等待。',
+    JSON.stringify(['weibo', 'wechat', 'website']),
+    '李澈', ago(40), '李澈', ago(20), ago(40), ago(20)).lastInsertRowid)
+  const l3 = db.prepare('INSERT INTO crisis_statement_logs (statement_id,action,detail,operator,time) VALUES (?,?,?,?,?)')
+  l3.run(s3, 'create', '公关起草危机声明（高优），拟定发布渠道：官方微博、微信公众号、官网', '李澈', ago(40))
+  l3.run(s3, 'submit', '提交法务审核，等待法务意见', '李澈', ago(20))
+  db.prepare('INSERT INTO crisis_timeline (crisis_id,action,note,time) VALUES (?,?,?,?)')
+    .run(c2.id, '声明送审', `声明「关于预售商品发货延迟问题的说明与补偿方案」提交法务审核（提交人：李澈）`, ago(20))
+}
+seedStatements()

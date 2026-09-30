@@ -63,6 +63,7 @@
         <div class="w-meta">
           <span>危机 <i>#{{ w.crisis_id }} {{ w.crisis_title || '' }}</i></span>
           <span v-if="w.prop_path_id" class="prop-src">🕸 源自传播路径 #{{ w.prop_path_id }}</span>
+          <span v-if="w.stmt" class="stmt-src" @click="gotoStmt(w)">📢 声明：{{ stmtStatusText(w.stmt.status) }}</span>
           <span>处理人 <i>{{ w.assignee ? `${w.assignee}${w.roleText ? '·'+w.roleText : ''}` : '待分派' }}</i></span>
           <span v-if="w.due_at && !['done','cancelled'].includes(w.status)" class="sla" :class="{over:w.overdue}">
             ⏱ {{ slaText(w) }}
@@ -82,6 +83,7 @@
           <button v-if="['todo','doing','blocked'].includes(w.status)" class="op" @click="assign(w)">⇄ 改派</button>
           <button v-if="['done','blocked','todo'].includes(w.status)" class="op rework" @click="rework(w)">↩ 回退</button>
           <button v-if="['todo','doing','blocked'].includes(w.status)" class="op cancel" @click="cancel(w)">✕ 取消</button>
+          <button class="op stmt-op" @click="gotoStmt(w)">{{ w.stmt ? '📢 查看声明' : '📢 起草声明' }}</button>
         </div>
         <button class="logbtn" @click="toggleLogs(w)">{{ logId===w.id ? '收起日志' : '📜 日志' }}</button>
         <div v-if="logId===w.id" class="w-logs">
@@ -120,6 +122,14 @@ const totalCount = computed(() => Object.values(summary.value.counts || {}).redu
 function roleText(r) { return { admin: '管理员', ops: '值班员', viewer: '观察员' }[r] || r }
 function roleName(r) { return dict.value.role[r] || r }
 function stText(s) { return { monitoring: '监测中', disposal: '处置中', closed: '已结案' }[s] || s }
+function stmtStatusText(s) { return { draft: '起草中', review: '待法务审核', approved: '审核通过', publishing: '发布中', published: '已发布', cancelled: '已取消' }[s] || s }
+// 跳转危机声明页：带所属危机预填起草，并预关联本工单
+function gotoStmt(w) {
+  store.stmtDraftCrisis = w.crisis_id
+  store.stmtWorkOrderId = w.stmt ? null : w.id
+  store.stmtOpenId = w.stmt ? w.stmt.id : null
+  store.tab = 'stmt'
+}
 function logText(a) {
   return {
     created: '拆分', assigned: '分派', claimed: '认领', started: '开始', blocked: '阻塞',
@@ -267,6 +277,7 @@ textarea{resize:vertical;min-height:52px;}
 .w-meta i{color:#90caf9;font-style:normal;}
 .prop-src{color:#80cbc4;}
 .prop-src i{font-style:normal;}
+.stmt-src{color:#80cbc4;background:#0d2b28;border:1px solid rgba(0,150,136,.3);border-radius:5px;padding:1px 7px;cursor:pointer;}
 .sla{color:#8ba2c8;}
 .sla.over{color:#ef9a9a;font-weight:700;}
 .w-blocked{margin-top:6px;font-size:10px;color:#ce93d8;background:#241226;border-radius:6px;padding:4px 8px;}
@@ -280,6 +291,7 @@ textarea{resize:vertical;min-height:52px;}
 .op.done{border-color:rgba(102,187,106,.5);color:#81c784;}
 .op.rework{border-color:rgba(255,213,79,.45);color:#ffe082;}
 .op.cancel{border-color:rgba(239,83,80,.4);color:#ef5350;}
+.op.stmt-op{border-color:rgba(38,166,154,.55);color:#80cbc4;}
 .logbtn{position:absolute;top:12px;right:12px;background:none;border:1px solid rgba(120,160,220,0.25);color:#8ba2c8;border-radius:7px;padding:3px 9px;font-size:10px;cursor:pointer;font-family:inherit;}
 .w-logs{margin-top:10px;border-top:1px dashed rgba(120,160,220,0.15);padding-top:8px;display:flex;flex-direction:column;gap:5px;max-height:200px;overflow-y:auto;}
 .wlog{display:flex;align-items:baseline;gap:8px;font-size:10px;color:#8ba2c8;}

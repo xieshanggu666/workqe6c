@@ -11,7 +11,7 @@
       </div>
       <span class="me">👤 {{ store.user.name }} · {{ roleText(store.user.role) }}</span>
     </div>
-    <p class="hint">🔗 复盘报告汇总<b>预警、处置时间线、传播路径、协同工单、通知回执</b>同源快照；支持跨角色分段编制 → 提交审核 → 审核发布（驳回可重编），每次送审/发布/回滚均归档不可变版本，已发布版本可一键回滚；审核通过自动回写结案档案与统计口径。</p>
+    <p class="hint">🔗 复盘报告汇总<b>预警、处置时间线、传播路径、协同工单、危机声明、通知回执</b>同源快照；支持跨角色分段编制 → 提交审核 → 审核发布（驳回可重编），每次送审/发布/回滚均归档不可变版本，已发布版本可一键回滚；审核通过自动回写结案档案与统计口径。</p>
 
     <!-- 创建报告 -->
     <form v-if="showForm" class="rp-form" @submit.prevent="create">
@@ -156,6 +156,26 @@
               </div>
             </section>
 
+            <!-- 危机声明 -->
+            <section class="snap-sec">
+              <h5>📢 危机声明（{{ (snap.statements && snap.statements.total) || 0 }} 份 · 已发布 {{ (snap.statements && snap.statements.published) || 0 }}<template v-if="snap.statements && snap.statements.review"> · 待审 {{ snap.statements.review }}</template>）</h5>
+              <div v-if="!snap.statements || !snap.statements.total" class="snap-empty">该事件暂无危机声明</div>
+              <div v-for="st in (snap.statements && snap.statements.items) || []" :key="st.id" class="stmt-snap" :class="st.status">
+                <div class="stmt-snap-head">
+                  <span class="tag" :class="'stmtst-'+st.status">{{ stmtStatusText(st.status) }}</span>
+                  <b>{{ st.title }}</b>
+                  <span v-if="st.work_order_id" class="stmt-wo">📋 关联工单 #{{ st.work_order_id }}</span>
+                  <span>起草 {{ st.drafted_by || '—' }} · 法务 {{ st.reviewed_by || '待审' }}</span>
+                </div>
+                <div class="stmt-chs">
+                  <span v-for="ch in st.channels" :key="ch.id" class="stmt-ch" :class="ch.status">
+                    {{ ch.channel_name }}<i>{{ stmtChText(ch.status) }}</i>
+                  </span>
+                </div>
+                <span v-if="st.review_note" class="stmt-note">⚖️ {{ st.review_note }}</span>
+              </div>
+            </section>
+
             <!-- 通知回执 -->
             <section class="snap-sec">
               <h5>🔔 通知与回执（{{ snap.notifications.total }} 条 · 已回执 {{ snap.notifications.acked }} · 已升级 {{ snap.notifications.escalated }}）</h5>
@@ -271,6 +291,8 @@ function logText(a) {
   return { create: '建档', edit: '编制', snapshot: '刷新快照', submit: '送审', approve: '审核通过', reject: '驳回', publish: '发布', rollback: '版本回滚' }[a] || a
 }
 function kindText(k) { return { manual: '手动解除', batch: '批量解除', close: '结案联动', notify: '通知回执', workorder: '工单联动' }[k] || k || '已解除' }
+function stmtStatusText(x) { return { draft: '起草中', review: '待法务审核', approved: '审核通过', publishing: '发布中', published: '已发布', cancelled: '已取消' }[x] || x }
+function stmtChText(x) { return { pending: '待执行', publishing: '执行中', success: '已发布', failed: '失败', cancelled: '已取消' }[x] || x }
 function formatNum(n) { return n >= 10000 ? (n / 10000).toFixed(1) + ' 万' : String(n || 0) }
 function hasReport(crisisId) { return items.value.some((r) => r.crisis_id === crisisId) }
 
@@ -481,6 +503,20 @@ input,select,textarea,button{font-family:inherit;}
 .wo-card-snap{display:flex;align-items:center;gap:9px;flex-wrap:wrap;background:#0c1730;border-radius:7px;padding:7px 11px;font-size:11px;color:#aebadd;margin-bottom:5px;}
 .wo-card-snap b{color:#dbe4f3;}
 .wo-result{color:#81c784;}
+.stmt-snap{background:#0c1a30;border:1px solid rgba(38,166,154,.2);border-left:3px solid #26a69a;border-radius:7px;padding:8px 11px;margin-bottom:6px;display:flex;flex-direction:column;gap:6px;}
+.stmt-snap.review{border-left-color:#ffb300;}.stmt-snap.published{border-left-color:#66bb6a;}.stmt-snap.cancelled{border-left-color:#616161;opacity:.8;}
+.stmt-snap-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px;color:#8ba2c8;}
+.stmt-snap-head b{color:#dbe4f3;}
+.stmt-wo{color:#80cbc4;font-size:10px;}
+.tag.stmtst-draft{background:#263238;color:#b0bec5;}.tag.stmtst-review{background:#33270e;color:#ffe082;}
+.tag.stmtst-approved{background:#0d2137;color:#90caf9;}.tag.stmtst-publishing{background:#08303a;color:#80deea;}
+.tag.stmtst-published{background:#1b5e20;color:#a5d6a7;}.tag.stmtst-cancelled{background:#21262c;color:#78909c;}
+.stmt-chs{display:flex;gap:6px;flex-wrap:wrap;}
+.stmt-ch{font-size:10px;padding:2px 9px;border-radius:5px;background:#0d2137;border:1px solid rgba(120,160,220,.2);color:#b0bec5;display:inline-flex;gap:5px;align-items:center;}
+.stmt-ch i{font-style:normal;}
+.stmt-ch.success{color:#a5d6a7;border-color:rgba(102,187,106,.4);}.stmt-ch.failed{color:#ef9a9a;border-color:rgba(239,83,80,.4);}
+.stmt-ch.publishing{color:#90caf9;border-color:rgba(66,165,245,.4);}.stmt-ch.cancelled{color:#78909c;}
+.stmt-note{font-size:10px;color:#ce93d8;}
 .st-todo{background:#37474f;color:#cfd8dc;}.st-doing{background:#0d47a1;color:#bbdefb;}.st-blocked{background:#4e342e;color:#ffcc80;}
 .st-done{background:#1b5e20;color:#a5d6a7;}.st-cancelled{background:#263238;color:#90a4ae;}
 .nt-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px;}

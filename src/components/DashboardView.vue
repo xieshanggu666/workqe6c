@@ -11,6 +11,7 @@
       <div class="stat alarm"><span class="s-ic">🔔</span><b>{{ s.alertOpen ?? 0 }}</b><em>未解除预警</em></div>
       <div class="stat crisis"><span class="s-ic">🛟</span><b>{{ s.crisisActive ?? 0 }}</b><em>在办危机</em></div>
       <div class="stat wo"><span class="s-ic">📋</span><b>{{ s.workOpen ?? 0 }}</b><em>在办工单{{ s.workOverdue ? `（超时 ${s.workOverdue}）` : '' }}</em></div>
+      <div class="stat stmt"><span class="s-ic">📢</span><b>{{ (s.stmtReview ?? 0) + (s.stmtPublishing ?? 0) }}</b><em>待办声明{{ s.stmtChannelFailed ? `（${s.stmtChannelFailed} 渠道失败）` : '' }}</em></div>
       <div class="stat prop"><span class="s-ic">🕸</span><b>{{ s.propActive ?? 0 }}</b><em>监测传播路径</em></div>
       <div class="stat prop-out"><span class="s-ic">🔥</span><b>{{ s.propOutbreak ?? 0 }}</b><em>爆发期路径</em></div>
       <div class="stat report"><span class="s-ic">📝</span><b>{{ s.reportPublished ?? 0 }}</b><em>已发布复盘报告</em></div>
@@ -162,7 +163,7 @@ function statusText(st) { return { monitoring: '监测中', disposal: '处置中
 .stat b{font-size:26px;color:#fff;}.stat em{font-size:11px;color:#8ba2c8;font-style:normal;}
 .s-ic{font-size:20px;}
 .stat.pos b{color:#66bb6a;}.stat.neu b{color:#90a4ae;}.stat.neg b{color:#ef5350;}.stat.warn b{color:#ffb300;}.stat.red b{color:#ef5350;}
-.stat.alarm b{color:#ffab91;}.stat.crisis b{color:#90caf9;}.stat.wo b{color:#80cbc4;}
+.stat.alarm b{color:#ffab91;}.stat.crisis b{color:#90caf9;}.stat.wo b{color:#80cbc4;}.stat.stmt b{color:#4dd0e1;}
 .stat.prop b{color:#80cbc4;}.stat.prop-out b{color:#ef5350;}
 .stat.report b{color:#ce93d8;}.stat.report-rev b{color:#ffcc80;}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}

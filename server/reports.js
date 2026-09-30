@@ -120,13 +120,37 @@ export function buildSnapshot(crisisId) {
     report_id: cl.report_id, report_version: cl.report_version, report_title: cl.report_title
   }))
 
+  // ---- 危机声明：公关起草→法务审核→分渠道发布登记（含分渠道结果与回写口径） ----
+  const stmtRows = q('SELECT * FROM crisis_statements WHERE crisis_id=? ORDER BY id ASC', crisisId)
+  const statements = {
+    total: stmtRows.length,
+    open: stmtRows.filter((s) => ['draft', 'review', 'approved', 'publishing'].includes(s.status)).length,
+    published: stmtRows.filter((s) => s.status === 'published').length,
+    review: stmtRows.filter((s) => s.status === 'review').length,
+    items: stmtRows.map((s) => {
+      const chRows = q('SELECT * FROM crisis_statement_channels WHERE statement_id=? ORDER BY id ASC', s.id)
+      return {
+        id: s.id, title: s.title, status: s.status, priority: s.priority,
+        drafted_by: s.drafted_by, reviewed_by: s.reviewed_by, review_note: s.review_note,
+        publish_by: s.publish_by, published_at: s.published_at, work_order_id: s.work_order_id,
+        channels: chRows.map((ch) => ({
+          channel: ch.channel, channel_name: ch.channel_name, status: ch.status,
+          assignee: ch.assignee, result: ch.result, fail_reason: ch.fail_reason, published_at: ch.published_at
+        })),
+        channelOk: chRows.filter((ch) => ch.status === 'success').length,
+        channelFail: chRows.filter((ch) => ch.status === 'failed').length,
+        channelTotal: chRows.length
+      }
+    })
+  }
+
   return {
     generatedAt: now(),
     crisis: {
       id: c.id, title: c.title, level: c.level, status: c.status, topic: c.topic,
       keyword: c.keyword, origin: c.origin, created: c.created, updated: c.updated
     },
-    alerts, timeline, propagation, workOrders, notifications, closures
+    alerts, timeline, propagation, workOrders, notifications, closures, statements
   }
 }
 

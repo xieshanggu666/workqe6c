@@ -62,13 +62,19 @@ function decorate(w) {
     remaining = (w.status === 'blocked' && w.paused_at ? w.due_at - w.paused_at : w.due_at - nowMs)
     overdue = remaining < 0 ? 1 : 0
   }
+  // 最近一次关联危机声明回写的进度（卡片展示，点击可跳声明详情）
+  let stmt = null
+  if (w.last_statement_id) {
+    stmt = q1('SELECT id,title,status FROM crisis_statements WHERE id=?', w.last_statement_id)
+  }
   return {
     ...w,
     statusText: WO_STATUS[w.status] || w.status,
     priorityText: WO_PRIORITY[w.priority] || w.priority,
     categoryText: WO_CATEGORY[w.category] || w.category,
     roleText: WO_ROLE[w.assignee_role] || w.assignee_role || '',
-    remainingMs: remaining, overdue
+    remainingMs: remaining, overdue,
+    stmt
   }
 }
 

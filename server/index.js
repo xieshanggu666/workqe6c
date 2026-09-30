@@ -37,6 +37,13 @@ import {
   createReport, renameReport, editSection, refreshSnapshot, submitReport,
   approveReport, rejectReport, rollbackReport, deleteReportsOfCrisis, ensureSeedSnapshots
 } from './reports.js'
+import {
+  STMT_STATUS, STMT_PRIORITY, STMT_CHANNELS, CH_STATUS,
+  listStatements, getStatement, statementSummary, crisisStatementBrief, crisisOpenStatementCount,
+  createStatement, editStatement, submitStatement, approveStatement, rejectStatement,
+  startPublishing, registerChannel, retryChannel, cancelChannel, cancelStatement,
+  deleteStatementsOfCrisis
+} from './statements.js'
 
 const app = express()
 app.use(express.json({ limit: '5mb' })) // 大批量导入（上限 5000 条）
@@ -81,7 +88,13 @@ function crisisList(withTimeline = false) {
     (SELECT COUNT(*) FROM work_orders wo WHERE wo.crisis_id=c.id AND wo.status IN ('todo','doing','blocked')) wo_open,
     (SELECT COUNT(*) FROM work_orders wo WHERE wo.crisis_id=c.id) wo_total,
     (SELECT COUNT(*) FROM prop_paths pp WHERE pp.crisis_id=c.id AND pp.status='active') prop_active,
-    (SELECT COUNT(*) FROM prop_paths pp WHERE pp.crisis_id=c.id AND pp.stage='outbreak' AND pp.status='active') prop_outbreak
+    (SELECT COUNT(*) FROM prop_paths pp WHERE pp.crisis_id=c.id AND pp.stage='outbreak' AND pp.status='active') prop_outbreak,
+    (SELECT COUNT(*) FROM crisis_statements st WHERE st.crisis_id=c.id AND st.status IN ('draft','review','approved','publishing')) stmt_open,
+    (SELECT COUNT(*) FROM crisis_statements st WHERE st.crisis_id=c.id) stmt_total,
+    (SELECT COUNT(*) FROM crisis_statement_channels sc JOIN crisis_statements st ON st.id=sc.statement_id
+      WHERE st.crisis_id=c.id AND sc.status IN ('pending','publishing')) stmt_ch_open,
+    (SELECT COUNT(*) FROM crisis_statement_channels sc JOIN crisis_statements st ON st.id=sc.statement_id
+      WHERE st.crisis_id=c.id AND sc.status='success') stmt_ch_ok
     FROM crisis c LEFT JOIN alerts a ON a.id=c.alert_id ORDER BY c.id DESC`)
   return list.map((c) => {
     const rules = q(`SELECT ca.alert_id, ca.is_origin, ca.first_at, ca.last_at, al.title alert_title, al.level alert_level
@@ -89,6 +102,7 @@ function crisisList(withTimeline = false) {
       WHERE ca.crisis_id=? ORDER BY ca.is_origin DESC, ca.alert_id`, c.id)
     const item = { ...c, rules }
     item.report = crisisReportBrief(c.id) // 复盘报告状态（编制中/待审核/已发布 + 当前版本）
+    item.statement = crisisStatementBrief(c.id) // 最新危机声明状态（危机卡片角标）
     if (withTimeline) item.timeline = q('SELECT * FROM crisis_timeline WHERE crisis_id=? ORDER BY id DESC', c.id)
     return item
   })
@@ -115,7 +129,11 @@ app.get('/api/state', (req, res) => {
     (SELECT COUNT(*) FROM prop_paths WHERE status='active') propActive,
     (SELECT COUNT(*) FROM crisis_reports WHERE status='draft') reportDraft,
     (SELECT COUNT(*) FROM crisis_reports WHERE status='reviewing') reportReviewing,
-    (SELECT COUNT(*) FROM crisis_reports WHERE status='published') reportPublished`, Date.now())
+    (SELECT COUNT(*) FROM crisis_reports WHERE status='published') reportPublished,
+    (SELECT COUNT(*) FROM crisis_statements WHERE status='review') stmtReview,
+    (SELECT COUNT(*) FROM crisis_statements WHERE status='publishing') stmtPublishing,
+    (SELECT COUNT(*) FROM crisis_statement_channels WHERE status IN ('pending','publishing')) stmtChannelOpen,
+    (SELECT COUNT(*) FROM crisis_statement_channels WHERE status='failed') stmtChannelFailed`, Date.now())
   // 热度趋势（近7时段）
   const nowH = new Date().getHours()
   const trend = []
@@ -448,6 +466,8 @@ app.post('/api/crisis/:id/close', (req, res) => {
   if (c.status === 'closed') return res.json({ ok: true, already: true })
   const openWo = crisisOpenCount(c.id)
   if (openWo > 0) return res.status(400).json({ error: `存在 ${openWo} 个未完结协同工单，请先完成或取消工单后再结案` })
+  const openStmt = crisisOpenStatementCount(c.id)
+  if (openStmt > 0) return res.status(400).json({ error: `存在 ${openStmt} 份未完结危机声明（起草/待审/发布中），请先完成或取消声明后再结案` })
   const summary = (req.body.summary || '').trim() || '预警解除，舆情回落，完成处置闭环。'
   const ts = now()
   const opens = q("SELECT * FROM alert_events WHERE crisis_id=? AND status='open'", c.id)
@@ -529,6 +549,8 @@ app.delete('/api/crisis/:id', (req, res) => {
   const woIds = q('SELECT id FROM work_orders WHERE crisis_id=?', req.params.id).map((r) => r.id)
   for (const wid of woIds) run('DELETE FROM work_order_logs WHERE wo_id=?', wid)
   run('DELETE FROM work_orders WHERE crisis_id=?', req.params.id)
+  // 危机声明随事件删除（分渠道登记与声明留痕一并清理）
+  deleteStatementsOfCrisis(+req.params.id)
   // 传播路径保留（沉淀的来源/节点/转发关系不随事件删除），仅解除危机引用
   run('UPDATE prop_paths SET crisis_id=NULL WHERE crisis_id=?', req.params.id)
   run('DELETE FROM crisis WHERE id=?', req.params.id)
@@ -953,6 +975,89 @@ app.post('/api/reports/:id/rollback', guard('admin'), (req, res) => {
   if (r.error) return res.status(400).json({ error: r.error })
   res.json(r)
 })
+
+// ===== 危机声明（公关起草 → 法务审核 → 分渠道发布执行与结果登记） =====
+// 权限：viewer 只读 / ops 起草·送审·发起发布·渠道执行登记·取消 / admin 同 ops 且独占法务审核（通过/驳回）
+// 声明看板（状态/危机过滤 + 汇总 + 渠道与状态字典）
+app.get('/api/statements', (req, res) => {
+  res.json({
+    items: listStatements({
+      status: String(req.query.status || ''),
+      crisisId: req.query.crisis_id ? +req.query.crisis_id : null
+    }),
+    summary: statementSummary(),
+    dict: { status: STMT_STATUS, priority: STMT_PRIORITY, channels: STMT_CHANNELS, channelStatus: CH_STATUS },
+    actor: actorOf(req)
+  })
+})
+// 声明详情（含分渠道登记与全程留痕）
+app.get('/api/statements/:id', (req, res) => {
+  const s = getStatement(+req.params.id)
+  if (!s) return res.status(404).json({ error: '危机声明不存在' })
+  res.json({ statement: s })
+})
+// 起草声明（ops+，可关联处置工单）
+app.post('/api/statements', guard('ops'), (req, res) => {
+  const r = createStatement(req.body, req.actor)
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 编辑声明（起草中；驳回退回后可修改）
+app.put('/api/statements/:id', guard('ops'), (req, res) => {
+  const r = editStatement(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 提交法务审核
+app.post('/api/statements/:id/submit', guard('ops'), (req, res) => {
+  const r = submitStatement(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 法务审核通过（仅 admin：演示中法务由管理员角色承担）
+app.post('/api/statements/:id/approve', guard('admin'), (req, res) => {
+  const r = approveStatement(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 法务审核驳回（仅 admin）
+app.post('/api/statements/:id/reject', guard('admin'), (req, res) => {
+  const r = rejectStatement(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 发起分渠道发布（审核通过 → 发布中；落渠道执行行）
+app.post('/api/statements/:id/publish', guard('ops'), (req, res) => {
+  const r = startPublishing(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+// 取消整份声明
+app.post('/api/statements/:id/cancel', guard('ops'), (req, res) => {
+  const r = cancelStatement(+req.params.id, req.body, req.actor)
+  if (!r) return res.status(404).json({ error: '危机声明不存在' })
+  if (r.error) return res.status(400).json({ error: r.error })
+  res.json(r)
+})
+function stmtChannelAction(handler) {
+  return (req, res) => {
+    const r = handler(+req.params.chId, req.body || {}, req.actor)
+    if (!r) return res.status(404).json({ error: '发布渠道记录不存在' })
+    if (r.error) return res.status(400).json({ error: r.error })
+    res.json(r)
+  }
+}
+// 登记渠道执行结果（执行中/成功/失败，发布人员分渠道登记）
+app.post('/api/statement-channels/:chId/register', guard('ops'), stmtChannelAction(registerChannel))
+// 失败渠道重试
+app.post('/api/statement-channels/:chId/retry', guard('ops'), stmtChannelAction(retryChannel))
+// 取消单个渠道
+app.post('/api/statement-channels/:chId/cancel', guard('ops'), stmtChannelAction(cancelChannel))
 
 const PORT = Number(process.env.PORT) || 4130
 app.listen(PORT, () => console.log(`[PUBMON] API running at http://localhost:${PORT}`))

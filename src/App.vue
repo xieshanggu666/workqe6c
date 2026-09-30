@@ -21,6 +21,7 @@
       <AlertCenterView v-else-if="tab==='alerts'" />
       <PropagationView v-else-if="tab==='prop'" />
       <CrisisView v-else-if="tab==='crisis'" />
+      <StatementsView v-else-if="tab==='stmt'" />
       <WorkOrderView v-else-if="tab==='work'" />
       <ReportsView v-else-if="tab==='report'" />
       <NotifyView v-else-if="tab==='notify'" />
@@ -41,6 +42,7 @@ import CollectView from '@/components/CollectView.vue'
 import AlertCenterView from '@/components/AlertCenterView.vue'
 import PropagationView from '@/components/PropagationView.vue'
 import CrisisView from '@/components/CrisisView.vue'
+import StatementsView from '@/components/StatementsView.vue'
 import WorkOrderView from '@/components/WorkOrderView.vue'
 import ReportsView from '@/components/ReportsView.vue'
 import NotifyView from '@/components/NotifyView.vue'
@@ -55,13 +57,15 @@ const tabs = [
   { key: 'alerts', icon: '🚨', label: '预警中心' },
   { key: 'prop', icon: '🕸', label: '传播路径', badge: () => store.stats.propOutbreak || 0 },
   { key: 'crisis', icon: '🛟', label: '危机处置' },
+  { key: 'stmt', icon: '📢', label: '危机声明', badge: () => (store.stats.stmtReview || 0) + (store.stats.stmtChannelFailed || 0) },
   { key: 'work', icon: '📋', label: '协同工单', badge: () => store.stats.workOpen || 0 },
   { key: 'report', icon: '📝', label: '复盘报告', badge: () => store.stats.reportReviewing || 0 },
   { key: 'notify', icon: '🔔', label: '通知中心', badge: () => store.stats.notifyOpen || 0 }
 ]
-// 演示权限模型：admin 配置+操作 / ops 任务操作 / viewer 只读（服务端强制校验）
+// 演示权限模型：admin 配置+操作（法务审核由管理员角色承担，如法务负责人陈律）/ ops 任务操作 / viewer 只读（服务端强制校验）
 const users = [
   { name: '张岚', role: 'admin' },
+  { name: '陈律', role: 'admin' },
   { name: '李澈', role: 'ops' },
   { name: '王观', role: 'viewer' }
 ]
